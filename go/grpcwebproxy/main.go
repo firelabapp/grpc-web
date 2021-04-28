@@ -21,6 +21,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	"golang.org/x/net/context"
+	"golang.org/x/net/http2/h2c"
 	_ "golang.org/x/net/trace" // register in DefaultServerMux
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
@@ -125,9 +126,20 @@ func buildServer(wrappedGrpc *grpcweb.WrappedGrpcServer) *http.Server {
 	return &http.Server{
 		WriteTimeout: *flagHttpMaxWriteTimeout,
 		ReadTimeout:  *flagHttpMaxReadTimeout,
-		Handler: http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-			wrappedGrpc.ServeHTTP(resp, req)
-		}),
+		Handler: h2c.NewHandler(http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
+			if req.ProtoMajor == 2 {
+				wrappedGrpc.ServeHTTP(resp, req)
+			} else {
+				resp.Header().Set("Access-Control-Allow-Origin", "*")
+				resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+				resp.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, X-User-Agent, X-Grpc-Web")
+				resp.Header().Set("grpc-status", "")
+				resp.Header().Set("grpc-message", "")
+				if wrappedGrpc.IsGrpcWebRequest(r) {
+					wrappedGrpc.ServeHTTP(w, r)
+				}
+			}
+		}), &http2.Server{}),
 	}
 }
 
